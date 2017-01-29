@@ -1,60 +1,205 @@
-﻿//------------------------------------------------------------------------------
-// <copyright file="VSIXTimeTrackerPackage.cs" company="Company">
-//     Copyright (c) Company.  All rights reserved.
-// </copyright>
-//------------------------------------------------------------------------------
-
-using System;
-using System.Diagnostics.CodeAnalysis;
+﻿using System;
+using System.ComponentModel.Design;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Windows;
+using EnvDTE;
+using EnvDTE80;
+using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using Microsoft.VisualStudio.TestWindow.Extensibility;
+using Process = System.Diagnostics.Process;
 
 namespace VSIXTimeTracker
 {
-	/// <summary>
-	///     This is the class that implements the package exposed by this assembly.
-	/// </summary>
-	/// <remarks>
-	///     <para>
-	///         The minimum requirement for a class to be considered a valid package for Visual Studio
-	///         is to implement the IVsPackage interface and register itself with the shell.
-	///         This package uses the helper classes defined inside the Managed Package Framework (MPF)
-	///         to do it: it derives from the Package class that provides the implementation of the
-	///         IVsPackage interface and uses the registration attributes defined in the framework to
-	///         register itself and its components with the shell. These attributes tell the pkgdef creation
-	///         utility what data to put into .pkgdef file.
-	///     </para>
-	///     <para>
-	///         To get loaded into VS, the package must be referred by &lt;Asset Type="Microsoft.VisualStudio.VsPackage" ...
-	///         &gt; in .vsixmanifest file.
-	///     </para>
-	/// </remarks>
 	[PackageRegistration(UseManagedResourcesOnly = true)]
-	[InstalledProductRegistration("#110", "#112", "1.0", IconResourceID = 400)] // Info on this package for Help/About
+	[InstalledProductRegistration("#110", "#112", "0.1.0", IconResourceID = 400)]
 	[Guid(PackageGuidString)]
-	[SuppressMessage("StyleCop.CSharp.DocumentationRules", "SA1650:ElementDocumentationMustBeSpelledCorrectly",
-		Justification = "pkgdef, VS and vsixmanifest are valid VS terms")]
-	public sealed class VSIXTimeTrackerPackage : Package
+	//[ProvideAutoLoad(UIContextGuids.SolutionExists)]
+	[ProvideAutoLoad(UIContextGuids.NoSolution)]
+	public sealed class VSIXTimeTrackerPackage : Package, IVsDebuggerEvents
 	{
-		/// <summary>
-		///     VSIXTimeTrackerPackage GUID string.
-		/// </summary>
-		public const string PackageGuidString = "58dd4b44-bfaf-438b-bac5-7afd515faf77";
+		public const string PackageGuidString = "C0A8C0A3-C17E-44B3-BC5E-7812DD4C1536";
 
 		private IVsOutputWindowPane outputWindow;
+		private DTE2 dte;
+		private Events events;
+		private BuildEvents buildEvents;
+		private DTEEvents dteEvents;
+		private SolutionEvents solutionEvents;
+		private IVsDebugger debugService;
+		private IOperationState operationState;
+		private Application application;
+		private uint debugCookie;
+		private VSStateMachine sm;
 
-		#region Package Members
-
-		/// <summary>
-		///     Initialization of the package; this method is called right after the package is sited, so this is the place
-		///     where you can put all the initialization code that rely on services provided by VisualStudio.
-		/// </summary>
 		protected override void Initialize()
 		{
 			base.Initialize();
 
+			var serviceContainer = (IServiceContainer) this;
+			dte = (DTE2) serviceContainer.GetService(typeof(SDTE));
+			events = dte.Events;
+			dteEvents = events.DTEEvents;
+
+			dteEvents.OnStartupComplete += OnStartupComplete;
+			dteEvents.OnBeginShutdown += OnBeginShutdown;
+		}
+
+		private void OnStartupComplete()
+		{
 			CreateOutputWindow();
+
+			solutionEvents = events.SolutionEvents;
+			buildEvents = events.BuildEvents;
+
+			solutionEvents.Opened += OnSolutionOpened;
+			solutionEvents.AfterClosing += OnSolutionClosed;
+
+			buildEvents.OnBuildBegin += OnBuildBegin;
+			buildEvents.OnBuildDone += OnBuildDone;
+
+			debugService = (IVsDebugger) GetGlobalService(typeof(SVsShellDebugger));
+			debugService.AdviseDebuggerEvents(this, out debugCookie);
+
+			var componentModel = (IComponentModel) GetGlobalService(typeof(SComponentModel));
+			operationState = componentModel.GetService<IOperationState>();
+			operationState.StateChanged += OperationStateOnStateChanged;
+
+			application = Application.Current;
+			application.Activated += OnApplicationActivated;
+			application.Deactivated += OnApplicationDeactivated;
+
+			sm = new VSStateMachine();
+
+			if (!ApplicationIsActivated())
+				sm.On(VSStateMachine.Events.LostFocus);
+
+			if (dte.Solution.Count > 0)
+				sm.On(VSStateMachine.Events.SolutionOpened);
+
+			sm.StateChanged += s => Output("Current state: {0}", s.ToString());
+
+			Output("Startup complete");
+			Output("Current state: {0}", sm.CurrentState.ToString());
+		}
+
+		private void OnBeginShutdown()
+		{
+			Output("Begin shutdown");
+
+			if (application != null)
+			{
+				application.Activated -= OnApplicationActivated;
+				application.Deactivated -= OnApplicationDeactivated;
+			}
+
+			if (buildEvents != null)
+			{
+				buildEvents.OnBuildBegin -= OnBuildBegin;
+				buildEvents.OnBuildDone -= OnBuildDone;
+			}
+
+			if (operationState != null)
+				operationState.StateChanged -= OperationStateOnStateChanged;
+
+			if (debugService != null)
+				debugService.UnadviseDebuggerEvents(debugCookie);
+
+			if (solutionEvents != null)
+			{
+				solutionEvents.Opened -= OnSolutionOpened;
+				solutionEvents.AfterClosing -= OnSolutionClosed;
+			}
+
+			dteEvents.OnStartupComplete -= OnStartupComplete;
+			dteEvents.OnBeginShutdown -= OnBeginShutdown;
+		}
+
+		private void OnApplicationActivated(object sender, EventArgs e)
+		{
+			Output("Application activated");
+			sm.On(VSStateMachine.Events.ReceivedFocus);
+		}
+
+		private void OnApplicationDeactivated(object sender, EventArgs e)
+		{
+			Output("Application deactivated");
+			sm.On(VSStateMachine.Events.LostFocus);
+		}
+
+		private void OperationStateOnStateChanged(object sender, OperationStateChangedEventArgs args)
+		{
+			if (args.State.HasFlag(TestOperationStates.TestExecutionStarted))
+			{
+				Output("Test execution started");
+				sm.On(VSStateMachine.Events.TestStarted);
+			}
+			else if (args.State.HasFlag(TestOperationStates.TestExecutionFinished))
+			{
+				Output("Test execution finished");
+				sm.On(VSStateMachine.Events.TestFinished);
+			}
+		}
+
+		private void OnSolutionOpened()
+		{
+			Output("Solution opened");
+			sm.On(VSStateMachine.Events.SolutionOpened);
+		}
+
+		private void OnSolutionClosed()
+		{
+			Output("Solution closed");
+			sm.On(VSStateMachine.Events.SolutionClosed);
+		}
+
+		private void OnBuildBegin(vsBuildScope scope, vsBuildAction action)
+		{
+			Output("Build begin");
+			sm.On(VSStateMachine.Events.BuildStarted);
+		}
+
+		private void OnBuildDone(vsBuildScope scope, vsBuildAction action)
+		{
+			Output("Build done");
+			sm.On(VSStateMachine.Events.BuildFinished);
+		}
+
+		int IVsDebuggerEvents.OnModeChange(DBGMODE dbgmodeNew)
+		{
+			switch (dbgmodeNew)
+			{
+				case DBGMODE.DBGMODE_Run:
+					Output("Debug started");
+					sm.On(VSStateMachine.Events.DebugStarted);
+					break;
+				case DBGMODE.DBGMODE_Design:
+					Output("Debug finished");
+					sm.On(VSStateMachine.Events.DebugFinished);
+					break;
+				default:
+					Output("Debug mode changed to {0}", dbgmodeNew);
+					break;
+			}
+			return (int) dbgmodeNew;
+		}
+
+		private void Output(string format, params object[] args)
+		{
+			string message;
+			if (args.Length > 0)
+				message = string.Format(format, args);
+			else
+				message = format;
+
+			message = string.Format("[{0}] {1}\n", DateTime.Now, message);
+
+			Debug.Write(message);
+
+			if (outputWindow != null)
+				outputWindow.OutputString(message);
 		}
 
 		private void CreateOutputWindow()
@@ -67,6 +212,24 @@ namespace VSIXTimeTracker
 			outWindow.GetPane(ref customGuid, out outputWindow);
 		}
 
-		#endregion
+		public static bool ApplicationIsActivated()
+		{
+			IntPtr activatedHandle = GetForegroundWindow();
+			if (activatedHandle == IntPtr.Zero)
+				return false; // No window is currently activated
+
+			int procId = Process.GetCurrentProcess()
+					.Id;
+			int activeProcId;
+			GetWindowThreadProcessId(activatedHandle, out activeProcId);
+
+			return activeProcId == procId;
+		}
+
+		[DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
+		private static extern IntPtr GetForegroundWindow();
+
+		[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+		private static extern int GetWindowThreadProcessId(IntPtr handle, out int processId);
 	}
 }

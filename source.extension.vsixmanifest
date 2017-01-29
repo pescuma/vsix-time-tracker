@@ -1,7 +1,7 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="VSIXTimeTracker.Company.eb1d081c-b116-4e60-bb32-75c21aab9af8" Version="0.1.0" Language="en-US" Publisher="Pescuma" />
+    <Identity Id="VSIXTimeTracker.Pescuma.C0A8C0A3-C17E-44B3-BC5E-7812DD4C1536" Version="0.1.0" Language="en-US" Publisher="Pescuma" />
     <DisplayName>VSIX Time Tracker</DisplayName>
     <Description xml:space="preserve">Track times inside Visual Studio: code, build, test ...</Description>
   </Metadata>
