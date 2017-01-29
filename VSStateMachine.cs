@@ -115,5 +115,18 @@ namespace VSIXTimeTracker
 				return States.Coding;
 			}
 		}
+
+		public VSStateTimes ElapsedTimes
+		{
+			get
+			{
+				var result = new VSStateTimes();
+
+				foreach (States state in Enum.GetValues(typeof(States)))
+					result.ElapsedMs.Add(state, stopwatches[state].ElapsedMilliseconds);
+
+				return result;
+			}
+		}
 	}
 }
