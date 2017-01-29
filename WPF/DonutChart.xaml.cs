@@ -73,7 +73,6 @@ namespace VSIXTimeTracker.WPF
 		public DonutChart()
 		{
 			InitializeComponent();
-			SnapsToDevicePixels = true;
 		}
 
 		public void UpdateValues(double[] vals)
@@ -130,7 +129,7 @@ namespace VSIXTimeTracker.WPF
 				slice.Stroke = Stroke;
 				slice.StrokeThickness = StrokeThickness;
 				slice.Fill = serie.Fill;
-				slice.SnapsToDevicePixels = true;
+				slice.SnapsToDevicePixels = SnapsToDevicePixels;
 			}
 		}
 

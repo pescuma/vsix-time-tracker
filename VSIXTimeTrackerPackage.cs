@@ -203,16 +203,12 @@ namespace VSIXTimeTracker
 					Output("Debug finished");
 					sm.On(VSStateMachine.Events.DebugFinished);
 					break;
-				default:
-					Output("Debug mode changed to {0}", dbgmodeNew);
-					break;
 			}
 			return (int) dbgmodeNew;
 		}
 
 		private void OnThemeChanged(ThemeChangedEventArgs e)
 		{
-			chart.Stroke = new SolidColorBrush(GetThemedColor(EnvironmentColors.EnvironmentBackgroundBrushKey));
 			UpdateChartColors(CreateChartConfigs());
 		}
 
@@ -269,12 +265,13 @@ namespace VSIXTimeTracker
 			chart = new DonutChart();
 			chart.Name = "TimeTrackerStatusBarChart";
 			chart.Padding = new Thickness(0, 2.5, 0, 1);
-			chart.Stroke = new SolidColorBrush(GetThemedColor(EnvironmentColors.EnvironmentBackgroundBrushKey));
+			chart.Stroke = new SolidColorBrush(Color.FromRgb(40, 40, 40));
 			chart.StrokeThickness = 1;
 			chart.InnerRadiusPercentage = 0.4;
 			chart.MinWidth = chart.MinHeight = statusbar.ActualHeight;
 			chart.MaxWidth = chart.MaxHeight = statusbar.ActualHeight;
 			chart.Width = chart.Height = statusbar.ActualHeight;
+			chart.SnapsToDevicePixels = true;
 
 			chart.Series = CreateChartSeries(chartConfigs);
 			UpdateChartColors(chartConfigs);
@@ -284,8 +281,16 @@ namespace VSIXTimeTracker
 			statusbar.Children.Insert(1, chart);
 
 			timer = new DispatcherTimer();
-			timer.Interval = TimeSpan.FromSeconds(1);
-			timer.Tick += (s, a) => UpdateChartValues(chartConfigs);
+			timer.Interval = TimeSpan.FromSeconds(5);
+			timer.Tick += (s, a) =>
+			{
+				VSStateTimes times = UpdateChartValues(chartConfigs);
+
+				long total = (times?.ElapsedMs.Sum(e => e.Value) ?? 0) / 1000;
+				total = Math.Min(Math.Max(total / 30, 3), 60 * 5);
+
+				timer.Interval = TimeSpan.FromSeconds(total);
+			};
 			timer.Start();
 
 			//Debug.WriteLine("*************");
@@ -305,10 +310,10 @@ namespace VSIXTimeTracker
 					.ToList();
 		}
 
-		private void UpdateChartValues(List<ChartConfig> chartConfigs)
+		private VSStateTimes UpdateChartValues(List<ChartConfig> chartConfigs)
 		{
 			if (sm == null)
-				return;
+				return null;
 
 			VSStateTimes times = sm.ElapsedTimes;
 
@@ -327,6 +332,8 @@ namespace VSIXTimeTracker
 					.ToArray();
 
 			chart.UpdateValues(values);
+
+			return times;
 		}
 
 		private void UpdateChartColors(List<ChartConfig> chartConfigs)
