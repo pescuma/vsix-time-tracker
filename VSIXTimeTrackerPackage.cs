@@ -1,6 +1,7 @@
 ﻿using System;
 using System.ComponentModel.Design;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using EnvDTE;
@@ -9,7 +10,6 @@ using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TestWindow.Extensibility;
-using Process = System.Diagnostics.Process;
 
 namespace VSIXTimeTracker
 {
@@ -73,7 +73,8 @@ namespace VSIXTimeTracker
 
 			sm = new VSStateMachine();
 
-			if (!ApplicationIsActivated())
+			if (application.Windows.OfType<System.Windows.Window>()
+					.All(w => !w.IsActive))
 				sm.On(VSStateMachine.Events.LostFocus);
 
 			if (dte.Solution.Count > 0)
@@ -211,25 +212,5 @@ namespace VSIXTimeTracker
 
 			outWindow.GetPane(ref customGuid, out outputWindow);
 		}
-
-		public static bool ApplicationIsActivated()
-		{
-			IntPtr activatedHandle = GetForegroundWindow();
-			if (activatedHandle == IntPtr.Zero)
-				return false; // No window is currently activated
-
-			int procId = Process.GetCurrentProcess()
-					.Id;
-			int activeProcId;
-			GetWindowThreadProcessId(activatedHandle, out activeProcId);
-
-			return activeProcId == procId;
-		}
-
-		[DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
-		private static extern IntPtr GetForegroundWindow();
-
-		[DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-		private static extern int GetWindowThreadProcessId(IntPtr handle, out int processId);
 	}
 }
