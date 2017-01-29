@@ -10,15 +10,12 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using EnvDTE;
 using EnvDTE80;
-using LiveCharts;
-using LiveCharts.Defaults;
-using LiveCharts.Wpf;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TestWindow.Extensibility;
-using Color = System.Drawing.Color;
+using VSIXTimeTracker.WPF;
 using Window = EnvDTE.Window;
 
 namespace VSIXTimeTracker
@@ -44,8 +41,8 @@ namespace VSIXTimeTracker
 		private Application application;
 		private uint debugCookie;
 		private VSStateMachine sm;
-		private PieChart chart;
 		private DispatcherTimer timer;
+		private DonutChart chart;
 
 		protected override void Initialize()
 		{
@@ -215,6 +212,7 @@ namespace VSIXTimeTracker
 
 		private void OnThemeChanged(ThemeChangedEventArgs e)
 		{
+			chart.Stroke = new SolidColorBrush(GetThemedColor(EnvironmentColors.EnvironmentBackgroundBrushKey));
 			UpdateChartColors(CreateChartConfigs());
 		}
 
@@ -262,44 +260,33 @@ namespace VSIXTimeTracker
 
 		private void CreateStatusBarIcon()
 		{
-			var grip =
-					(Control)
-					FindControl(Application.Current.MainWindow, o => o is Control && ((Control) o).Name == "ResizeGripControl");
+			var grip = (Control) FindControl(Application.Current.MainWindow, o => (o as Control)?.Name == "ResizeGripControl");
 
 			var statusbar = (DockPanel) VisualTreeHelper.GetParent(grip);
 
 			List<ChartConfig> chartConfigs = CreateChartConfigs();
 
-			chart = new PieChart();
+			chart = new DonutChart();
 			chart.Name = "TimeTrackerStatusBarChart";
-			chart.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 0, 0));
+			chart.Padding = new Thickness(0, 2.5, 0, 1);
+			chart.Stroke = new SolidColorBrush(GetThemedColor(EnvironmentColors.EnvironmentBackgroundBrushKey));
+			chart.StrokeThickness = 1;
+			chart.InnerRadiusPercentage = 0.4;
+			chart.MinWidth = chart.MinHeight = statusbar.ActualHeight;
+			chart.MaxWidth = chart.MaxHeight = statusbar.ActualHeight;
+			chart.Width = chart.Height = statusbar.ActualHeight;
 
 			chart.Series = CreateChartSeries(chartConfigs);
 			UpdateChartColors(chartConfigs);
 			UpdateChartValues(chartConfigs);
 
-			chart.AxisX.Clear();
-			chart.AxisY.Clear();
-			chart.InnerRadius = 2;
-			chart.StartingRotationAngle = 0;
-			chart.Hoverable = false;
-			chart.LegendLocation = LegendLocation.None;
-			chart.ChartLegend = null;
-			chart.DataTooltip = null;
-			chart.MinWidth = chart.MinHeight = statusbar.ActualHeight;
-			chart.MaxWidth = chart.MaxHeight = statusbar.ActualHeight;
-			chart.Width = chart.Height = statusbar.ActualHeight;
-
 			DockPanel.SetDock(chart, Dock.Right);
 			statusbar.Children.Insert(1, chart);
-
 
 			timer = new DispatcherTimer();
 			timer.Interval = TimeSpan.FromSeconds(1);
 			timer.Tick += (s, a) => UpdateChartValues(chartConfigs);
 			timer.Start();
-
-			//Control grip = FindControl(Application.Current.MainWindow, o => o.Name == "ResizeGripControl");
 
 			//Debug.WriteLine("*************");
 			//DebugElement(statusbar, "");
@@ -307,36 +294,19 @@ namespace VSIXTimeTracker
 			//DebugElement(Application.Current.MainWindow, "");
 		}
 
-		private static SeriesCollection CreateChartSeries(List<ChartConfig> chartConfigs)
+		private static List<Serie> CreateChartSeries(List<ChartConfig> chartConfigs)
 		{
-			var result = new SeriesCollection();
-
-			foreach (ChartConfig config in chartConfigs.OrderBy(c => c.Pos))
-			{
-				var series = new PieSeries
-				{
-					Title = config.Legend,
-					Values = new ChartValues<ObservableValue>
+			return chartConfigs.OrderBy(c => c.Pos)
+					.Select(config => new Serie
 					{
-						new ObservableValue(0)
-					},
-					StrokeThickness = 1
-				};
-				result.Add(series);
-			}
-
-			int p = chartConfigs.Single(c => c.States.Contains(States.NoFocus))
-					.Pos;
-			((ObservableValue) result[p].Values[0]).Value = 1;
-
-			return result;
+						Name = config.Legend,
+						Value = config.States.Contains(States.NoFocus) ? 1 : 0
+					})
+					.ToList();
 		}
 
 		private void UpdateChartValues(List<ChartConfig> chartConfigs)
 		{
-			chart.AxisX.Clear();
-			chart.AxisY.Clear();
-
 			if (sm == null)
 				return;
 
@@ -344,41 +314,51 @@ namespace VSIXTimeTracker
 
 			bool hasValues = times.ElapsedMs.Values.Any(i => i > 0);
 
-			foreach (ChartConfig config in chartConfigs)
-			{
-				var serie = (PieSeries) chart.Series[config.Pos];
-				var val = (ObservableValue) serie.Values[0];
+			double[] values = chartConfigs.OrderBy(c => c.Pos)
+					.Select(config =>
+					{
+						long time = config.States.Sum(s => times.ElapsedMs[s]);
 
-				long time = config.States.Sum(s => times.ElapsedMs[s]);
+						if (!hasValues && config.States.Contains(States.NoFocus))
+							time = 1;
 
-				if (!hasValues && config.States.Contains(States.NoFocus))
-					time = 1;
+						return (double) time;
+					})
+					.ToArray();
 
-				val.Value = time;
-			}
+			chart.UpdateValues(values);
 		}
 
 		private void UpdateChartColors(List<ChartConfig> chartConfigs)
 		{
-			foreach (ChartConfig config in chartConfigs)
-			{
-				var serie = (PieSeries) chart.Series[config.Pos];
-				serie.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(config.Color.R, config.Color.G, config.Color.B));
-			}
+			Brush[] values = chartConfigs.OrderBy(c => c.Pos)
+					.Select(c => (Brush) new SolidColorBrush(c.Color))
+					.ToArray();
+
+			chart.UpdateFills(values);
 		}
 
 		private static List<ChartConfig> CreateChartConfigs()
 		{
 			return new List<ChartConfig>
 			{
-				new ChartConfig(0, "Coding", VSColorTheme.GetThemedColor(EnvironmentColors.StatusBarDefaultColorKey), States.Coding),
-				new ChartConfig(1, "Testing", Color.ForestGreen, States.Testing),
-				new ChartConfig(2, "Debugging", VSColorTheme.GetThemedColor(EnvironmentColors.StatusBarDebuggingColorKey),
-					States.Debugging),
-				new ChartConfig(3, "Building", VSColorTheme.GetThemedColor(EnvironmentColors.StatusBarBuildingColorKey),
-					States.Building),
-				new ChartConfig(4, "Outside VS", Color.LightGray, States.NoFocus, States.NoSolution)
+				new ChartConfig(0, "Coding", GetThemedColor(EnvironmentColors.StatusBarDefaultColorKey), States.Coding),
+				new ChartConfig(1, "Testing", ToColor(System.Drawing.Color.ForestGreen), States.Testing),
+				new ChartConfig(2, "Debugging", GetThemedColor(EnvironmentColors.StatusBarDebuggingColorKey), States.Debugging),
+				new ChartConfig(3, "Building", GetThemedColor(EnvironmentColors.StatusBarBuildingColorKey), States.Building),
+				new ChartConfig(4, "Outside VS", ToColor(System.Drawing.Color.LightGray), States.NoFocus, States.NoSolution)
 			};
+		}
+
+		private static Color GetThemedColor(ThemeResourceKey key)
+		{
+			System.Drawing.Color color = VSColorTheme.GetThemedColor(key);
+			return ToColor(color);
+		}
+
+		private static Color ToColor(System.Drawing.Color color)
+		{
+			return Color.FromArgb(color.A, color.R, color.G, color.B);
 		}
 
 // ReSharper disable once UnusedMember.Local
