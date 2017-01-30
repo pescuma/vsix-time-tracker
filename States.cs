@@ -2,11 +2,16 @@
 {
 	internal enum States
 	{
+		SystemSuspended,
+		SessionLocked,
+		MonitorOff,
+		LidClosed,
+		ScreenSaverRunning,
 		NoFocus,
 		NoSolution,
-		Coding,
 		Building,
+		Debugging,
 		Testing,
-		Debugging
+		Coding
 	}
 }

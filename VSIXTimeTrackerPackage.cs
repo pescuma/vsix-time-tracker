@@ -15,8 +15,9 @@ using Microsoft.VisualStudio.PlatformUI;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.TestWindow.Extensibility;
+using Microsoft.Win32;
 using VSIXTimeTracker.WPF;
-using Window = EnvDTE.Window;
+using Window = System.Windows.Window;
 
 namespace VSIXTimeTracker
 {
@@ -41,7 +42,7 @@ namespace VSIXTimeTracker
 		private Application application;
 		private uint debugCookie;
 		private VSStateMachine sm;
-		private DispatcherTimer timer;
+		private readonly List<DispatcherTimer> timers = new List<DispatcherTimer>();
 		private DonutChart chart;
 
 		protected override void Initialize()
@@ -85,11 +86,22 @@ namespace VSIXTimeTracker
 			application.Deactivated += OnApplicationDeactivated;
 			windowEvents.WindowActivated += OnWindowActivated;
 
+			SystemEvents.SessionSwitch += OnSessionSwitch;
+			SystemEvents.PowerModeChanged += OnPowerModeChanged;
+
 			VSColorTheme.ThemeChanged += OnThemeChanged;
+
+			chart.Loaded += (s, a) =>
+			{
+				Window window = Window.GetWindow(chart);
+				new Lid(window).StatusChanged += OnLidStatusChanged;
+			};
+
+			ListenToScreenSaver();
 
 			sm = new VSStateMachine();
 
-			if (application.Windows.OfType<System.Windows.Window>()
+			if (application.Windows.OfType<Window>()
 					.All(w => !w.IsActive))
 				sm.On(VSStateMachine.Events.LostFocus);
 
@@ -106,7 +118,7 @@ namespace VSIXTimeTracker
 		{
 			Output("Begin shutdown");
 
-			timer?.Stop();
+			timers.ForEach(t => t.Stop());
 
 			if (application != null)
 			{
@@ -135,6 +147,76 @@ namespace VSIXTimeTracker
 			dteEvents.OnBeginShutdown -= OnBeginShutdown;
 		}
 
+		private void OnLidStatusChanged(bool open)
+		{
+			if (open)
+			{
+				Output("Lid opened");
+				sm.On(VSStateMachine.Events.LidOpened);
+			}
+			else
+			{
+				Output("Lid closed");
+				sm.On(VSStateMachine.Events.LidClosed);
+			}
+		}
+
+		private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+		{
+			if (e.Reason == SessionSwitchReason.SessionLock)
+			{
+				Output("Session locked");
+				sm.On(VSStateMachine.Events.SessionLocked);
+			}
+			else if (e.Reason == SessionSwitchReason.SessionUnlock)
+			{
+				Output("Session unlocked");
+				sm.On(VSStateMachine.Events.SessionUnlocked);
+			}
+		}
+
+		private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+		{
+			if (e.Mode == PowerModes.Suspend)
+			{
+				Output("System suspended");
+				sm.On(VSStateMachine.Events.SystemSuspended);
+			}
+			else if (e.Mode == PowerModes.Resume)
+			{
+				Output("System resumed");
+				sm.On(VSStateMachine.Events.SystemResumed);
+			}
+		}
+
+		private void ListenToScreenSaver()
+		{
+			var timer = new DispatcherTimer();
+			timer.Interval = TimeSpan.FromMinutes(1);
+			timer.Tick += (s, a) =>
+			{
+				bool newRunning = ScreenSaver.GetScreenSaverRunning();
+				bool oldRunning = sm.IsOn(States.ScreenSaverRunning);
+
+				if (newRunning == oldRunning)
+					return;
+
+				if (newRunning)
+				{
+					Output("Screen saver running");
+					sm.On(VSStateMachine.Events.ScreenSaverRunning);
+				}
+				else
+				{
+					Output("Screen saver not running");
+					sm.On(VSStateMachine.Events.ScreenSaverNotRunning);
+				}
+			};
+			timer.Start();
+
+			timers.Add(timer);
+		}
+
 		private void OnApplicationActivated(object sender, EventArgs e)
 		{
 			Output("Application activated");
@@ -147,7 +229,7 @@ namespace VSIXTimeTracker
 			sm.On(VSStateMachine.Events.LostFocus);
 		}
 
-		private void OnWindowActivated(Window gotfocus, Window lostfocus)
+		private void OnWindowActivated(EnvDTE.Window gotfocus, EnvDTE.Window lostfocus)
 		{
 			Output("Window activated");
 			sm.On(VSStateMachine.Events.ReceivedFocus);
@@ -280,7 +362,7 @@ namespace VSIXTimeTracker
 			DockPanel.SetDock(chart, Dock.Right);
 			statusbar.Children.Insert(1, chart);
 
-			timer = new DispatcherTimer();
+			var timer = new DispatcherTimer();
 			timer.Interval = TimeSpan.FromSeconds(5);
 			timer.Tick += (s, a) =>
 			{
@@ -292,6 +374,8 @@ namespace VSIXTimeTracker
 				timer.Interval = TimeSpan.FromSeconds(total);
 			};
 			timer.Start();
+
+			timers.Add(timer);
 
 			//Debug.WriteLine("*************");
 			//DebugElement(statusbar, "");
@@ -317,19 +401,12 @@ namespace VSIXTimeTracker
 
 			VSStateTimes times = sm.ElapsedTimes;
 
-			bool hasValues = times.ElapsedMs.Values.Any(i => i > 0);
-
 			double[] values = chartConfigs.OrderBy(c => c.Pos)
-					.Select(config =>
-					{
-						long time = config.States.Sum(s => times.ElapsedMs[s]);
-
-						if (!hasValues && config.States.Contains(States.NoFocus))
-							time = 1;
-
-						return (double) time;
-					})
+					.Select(config => (double) config.States.Sum(s => times.ElapsedMs[s]))
 					.ToArray();
+
+			if (values.All(v => v <= 0))
+				values[chartConfigs.FindIndex(c => c.States.Contains(States.NoFocus))] = 1;
 
 			chart.UpdateValues(values);
 
@@ -354,6 +431,8 @@ namespace VSIXTimeTracker
 				new ChartConfig(2, "Debugging", GetThemedColor(EnvironmentColors.StatusBarDebuggingColorKey), States.Debugging),
 				new ChartConfig(3, "Building", GetThemedColor(EnvironmentColors.StatusBarBuildingColorKey), States.Building),
 				new ChartConfig(4, "Outside VS", ToColor(System.Drawing.Color.LightGray), States.NoFocus, States.NoSolution)
+				//new ChartConfig(4, "Away from PC", ToColor(System.Drawing.Color.Black), States.SystemSuspended, States.SessionLocked,
+				//	States.MonitorOff, States.LidClosed, States.ScreenSaverRunning)
 			};
 		}
 

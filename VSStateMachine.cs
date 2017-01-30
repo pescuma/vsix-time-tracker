@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 
 namespace VSIXTimeTracker
 {
@@ -17,7 +18,17 @@ namespace VSIXTimeTracker
 			TestStarted,
 			TestFinished,
 			DebugStarted,
-			DebugFinished
+			DebugFinished,
+			SessionLocked,
+			SessionUnlocked,
+			ScreenSaverRunning,
+			ScreenSaverNotRunning,
+			MonitorOn,
+			MonitorOff,
+			LidOpened,
+			LidClosed,
+			SystemResumed,
+			SystemSuspended
 		}
 
 		private readonly Dictionary<States, bool> states = new Dictionary<States, bool>();
@@ -43,8 +54,39 @@ namespace VSIXTimeTracker
 
 			switch (trigger)
 			{
+				case Events.SystemSuspended:
+					states[States.SystemSuspended] = true;
+					break;
+				case Events.SystemResumed:
+					states[States.SystemSuspended] = false;
+					break;
+				case Events.MonitorOff:
+					states[States.MonitorOff] = true;
+					break;
+				case Events.MonitorOn:
+					states[States.MonitorOff] = false;
+					break;
+				case Events.LidClosed:
+					states[States.LidClosed] = true;
+					break;
+				case Events.LidOpened:
+					states[States.LidClosed] = false;
+					break;
+				case Events.SessionLocked:
+					states[States.SessionLocked] = true;
+					break;
+				case Events.SessionUnlocked:
+					states[States.SessionLocked] = false;
+					break;
+				case Events.ScreenSaverRunning:
+					states[States.ScreenSaverRunning] = true;
+					break;
+				case Events.ScreenSaverNotRunning:
+					states[States.ScreenSaverRunning] = false;
+					break;
 				case Events.ReceivedFocus:
 					states[States.NoFocus] = false;
+					states[States.ScreenSaverRunning] = false;
 					break;
 				case Events.LostFocus:
 					states[States.NoFocus] = true;
@@ -80,6 +122,11 @@ namespace VSIXTimeTracker
 			OnTransition(oldState);
 		}
 
+		public bool IsOn(States state)
+		{
+			return states[state];
+		}
+
 		private void OnTransition(States oldState)
 		{
 			foreach (Stopwatch sw in stopwatches.Values)
@@ -93,20 +140,13 @@ namespace VSIXTimeTracker
 				StateChanged?.Invoke(currentState);
 		}
 
-		private static readonly States[] StatePriorities =
-		{
-			States.NoFocus,
-			States.NoSolution,
-			States.Building,
-			States.Debugging,
-			States.Testing
-		};
-
 		public States CurrentState
 		{
 			get
 			{
-				foreach (States priority in StatePriorities)
+				foreach (States priority in Enum.GetValues(typeof(States))
+						.Cast<States>()
+						.OrderBy(s => (int) s))
 				{
 					if (states[priority])
 						return priority;
