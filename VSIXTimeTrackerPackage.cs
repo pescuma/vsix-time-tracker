@@ -367,8 +367,11 @@ namespace VSIXTimeTracker
 			timer.Tick += (s, a) =>
 			{
 				VSStateTimes times = UpdateChartValues(chartConfigs);
+				if (times == null)
+					return;
 
-				long total = (times?.ElapsedMs.Sum(e => e.Value) ?? 0) / 1000;
+				long total = chartConfigs.SelectMany(c => c.States)
+						             .Sum(i => times.ElapsedMs[i]) / 1000;
 				total = Math.Min(Math.Max(total / 30, 3), 60 * 5);
 
 				timer.Interval = TimeSpan.FromSeconds(total);
